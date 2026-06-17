@@ -2,6 +2,8 @@ import json
 import logging
 import os
 import re
+import secrets
+import string
 from datetime import datetime, timedelta
 
 from dotenv import load_dotenv
@@ -28,6 +30,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_FILE = os.path.join(BASE_DIR, "appointments.json")
 SOURCE_NAME = "Sumitra Hospital OPD timetable"
 PHONE_PATTERN = re.compile(r"^\d{10}$")
+BOOKING_ID_PATTERN = re.compile(r"^APT-[A-Z0-9]{4,8}$")
 VALID_DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 FIREBASE_CLIENT = None
 FIREBASE_INIT_ERROR = None
@@ -334,6 +337,16 @@ def slot_doc_id(doctor, specialty, day, time_text):
     return "slot_" + slugify(f"{doctor}_{specialty}_{day}_{time_text}")
 
 
+def normalize_booking_id(booking_id):
+    booking_id = normalize_text(booking_id).upper()
+    return booking_id if BOOKING_ID_PATTERN.match(booking_id) else ""
+
+
+def generate_booking_id():
+    alphabet = string.ascii_uppercase + string.digits
+    return "APT-" + "".join(secrets.choice(alphabet) for _ in range(4))
+
+
 def iter_slot_times(start_time, end_time):
     start = parse_time(start_time)
     end = parse_time(end_time)
@@ -445,7 +458,7 @@ def ensure_local_data():
 
 def sanitize_slot(slot, include_patient=False):
     response = {
-        "appointment_id": slot.get("appointment_id", ""),
+        "booking_id": slot.get("booking_id", ""),
         "doctor": slot.get("doctor", ""),
         "specialty": slot.get("specialty", ""),
         "day": slot.get("day", ""),
@@ -469,6 +482,17 @@ def sanitize_slot(slot, include_patient=False):
 
 def sort_slots(slots):
     return sorted(slots, key=lambda item: (item.get("day", ""), time_sort_key(item.get("time", "")), item.get("doctor", "")))
+
+
+def public_appointment_response(slot):
+    return {
+        "booking_id": slot.get("booking_id", ""),
+        "doctor": slot.get("doctor", ""),
+        "specialty": slot.get("specialty", ""),
+        "day": slot.get("day", ""),
+        "time": slot.get("time", ""),
+        "status": slot.get("status", ""),
+    }
 
 
 def seed_firestore_data(client):
@@ -526,6 +550,23 @@ def firestore_slots_for_query(client, day=None, specialty=None, doctor=None, sta
         slots.append(slot)
 
     return sort_slots(slots)
+
+
+def firestore_booking_id_exists(client, booking_id):
+    query = apply_firestore_filter(client.collection("appointments"), "booking_id", "==", booking_id)
+    return any(query.limit(1).stream())
+
+
+def local_booking_id_exists(data, booking_id):
+    return any(slot.get("booking_id") == booking_id for slot in data.get("appointments", []))
+
+
+def create_unique_booking_id(exists_callback):
+    for _ in range(20):
+        booking_id = generate_booking_id()
+        if not exists_callback(booking_id):
+            return booking_id
+    raise RuntimeError("Could not generate a unique booking ID.")
 
 
 def firestore_doctors_for_query(client, day=None, specialty=None, doctor=None):
@@ -687,11 +728,13 @@ def find_local_slot(data, doctor, specialty, day, time_text):
     return None, None
 
 
-def find_active_local_appointment(data, appointment_id=None, phone=None):
+def find_active_local_appointment(data, appointment_id=None, booking_id=None, phone=None):
     matches = []
     for index, slot in enumerate(data.get("appointments", [])):
         if slot.get("status") != "Booked":
             continue
+        if booking_id and slot.get("booking_id") == booking_id:
+            return [(index, slot)]
         if appointment_id and slot.get("appointment_id") == appointment_id:
             return [(index, slot)]
         if phone and slot.get("phone") == phone:
@@ -709,12 +752,25 @@ def appointment_matches(slot, doctor=None, day=None, time_text=None):
     return True
 
 
-def find_matching_local_appointment(data, appointment_id=None, phone=None, doctor=None, day=None, time_text=None):
-    matches = find_active_local_appointment(data, appointment_id=appointment_id, phone=phone)
+def find_matching_local_appointment(data, appointment_id=None, booking_id=None, phone=None, doctor=None, day=None, time_text=None):
+    matches = find_active_local_appointment(data, appointment_id=appointment_id, booking_id=booking_id, phone=phone)
     return [(index, slot) for index, slot in matches if appointment_matches(slot, doctor=doctor, day=day, time_text=time_text)]
 
 
-def find_active_firestore_appointment(client, appointment_id=None, phone=None, doctor=None, day=None, time_text=None):
+def find_active_firestore_appointment(client, appointment_id=None, booking_id=None, phone=None, doctor=None, day=None, time_text=None):
+    if booking_id:
+        query = apply_firestore_filter(client.collection("appointments"), "booking_id", "==", booking_id)
+        matches = []
+        for doc in query.stream():
+            slot = doc.to_dict() or {}
+            if slot.get("status") != "Booked":
+                continue
+            slot["appointment_id"] = doc.id
+            if not appointment_matches(slot, doctor=doctor, day=day, time_text=time_text):
+                continue
+            matches.append((client.collection("appointments").document(doc.id), slot))
+        return matches
+
     if appointment_id:
         ref = client.collection("appointments").document(appointment_id)
         snapshot = ref.get()
@@ -746,7 +802,7 @@ def appointment_lookup_error(matches):
         return json_error("No active booked appointment found.", 404)
     if len(matches) > 1:
         return json_error(
-            "Multiple active appointments found. Please provide appointment_id.",
+            "Multiple active appointments found. Please provide booking_id.",
             409,
             {"appointments": [sanitize_slot(slot, include_patient=True) for _, slot in matches]},
         )
@@ -879,6 +935,7 @@ def book_appointment():
     now = utc_now()
 
     if client:
+        booking_id = create_unique_booking_id(lambda candidate: firestore_booking_id_exists(client, candidate))
         slot_ref, slot = find_firestore_slot(
             client,
             payload["doctor"],
@@ -903,6 +960,7 @@ def book_appointment():
             booked_data = {
                 **slot,
                 "appointment_id": ref.id,
+                "booking_id": booking_id,
                 "doctor": slot["doctor"],
                 "doctor_lower": normalize_key(slot["doctor"]),
                 "specialty": slot["specialty"],
@@ -930,6 +988,7 @@ def book_appointment():
 
     else:
         local_data = ensure_local_data()
+        booking_id = create_unique_booking_id(lambda candidate: local_booking_id_exists(local_data, candidate))
         index, slot = find_local_slot(local_data, payload["doctor"], payload["specialty"], payload["day"], payload["time"])
         if slot is None:
             return json_error("No matching available OPD slot found for this doctor, specialty, day, and time.", 404)
@@ -940,6 +999,7 @@ def book_appointment():
 
         slot.update(
             {
+                "booking_id": booking_id,
                 "patient_name": payload["name"],
                 "phone": payload["phone"],
                 "reason": payload["reason"],
@@ -958,7 +1018,11 @@ def book_appointment():
         {
             "success": True,
             "message": "Appointment booked successfully.",
-            "appointment": sanitize_slot(booked_slot, include_patient=True),
+            "booking_id": booked_slot.get("booking_id", ""),
+            "doctor": booked_slot.get("doctor", ""),
+            "day": booked_slot.get("day", ""),
+            "time": booked_slot.get("time", ""),
+            "specialty": booked_slot.get("specialty", ""),
         }
     ), 201
 
@@ -966,14 +1030,17 @@ def book_appointment():
 @app.post("/cancel-appointment")
 def cancel_appointment():
     data = get_request_data()
+    booking_id = normalize_booking_id(data.get("booking_id"))
     appointment_id = normalize_text(data.get("appointment_id"))
     phone = normalize_text(data.get("phone"))
     doctor = normalize_text(data.get("doctor"))
     day = normalize_day(data.get("day")) if data.get("day") else None
     appointment_time = format_time(data.get("time")) if data.get("time") else None
 
-    if not appointment_id and not is_valid_phone(phone):
-        return json_error("Provide appointment_id or a valid 10-digit phone number.", 400)
+    if data.get("booking_id") and not booking_id:
+        return json_error("Invalid booking_id. Use a value like APT-7K3P.", 400)
+    if not booking_id and not appointment_id and not is_valid_phone(phone):
+        return json_error("Provide booking_id or fallback appointment details.", 400)
     if data.get("day") and not day:
         return json_error("Invalid day. Please choose a valid OPD day.", 400)
     if data.get("time") and not appointment_time:
@@ -986,6 +1053,7 @@ def cancel_appointment():
         matches = find_active_firestore_appointment(
             client,
             appointment_id=appointment_id,
+            booking_id=booking_id,
             phone=phone,
             doctor=doctor,
             day=day,
@@ -1009,6 +1077,7 @@ def cancel_appointment():
         matches = find_matching_local_appointment(
             local_data,
             appointment_id=appointment_id,
+            booking_id=booking_id,
             phone=phone,
             doctor=doctor,
             day=day,
@@ -1037,7 +1106,12 @@ def cancel_appointment():
         {
             "success": True,
             "message": "Appointment cancelled successfully.",
-            "appointment": sanitize_slot(slot, include_patient=True),
+            "booking_id": slot.get("booking_id", ""),
+            "doctor": slot.get("doctor", ""),
+            "day": slot.get("day", ""),
+            "time": slot.get("time", ""),
+            "specialty": slot.get("specialty", ""),
+            "status": slot.get("status", ""),
         }
     ), 200
 
@@ -1045,6 +1119,7 @@ def cancel_appointment():
 @app.post("/reschedule-appointment")
 def reschedule_appointment():
     data = get_request_data()
+    booking_id = normalize_booking_id(data.get("booking_id"))
     appointment_id = normalize_text(data.get("appointment_id"))
     phone = normalize_text(data.get("phone"))
     doctor = normalize_text(data.get("doctor"))
@@ -1056,8 +1131,10 @@ def reschedule_appointment():
     new_time = format_time(data.get("new_time") or data.get("time"))
     now = utc_now()
 
-    if not appointment_id and not is_valid_phone(phone):
-        return json_error("Provide appointment_id or a valid 10-digit phone number.", 400)
+    if data.get("booking_id") and not booking_id:
+        return json_error("Invalid booking_id. Use a value like APT-7K3P.", 400)
+    if not booking_id and not appointment_id and not is_valid_phone(phone):
+        return json_error("Provide booking_id or fallback appointment details.", 400)
     if data.get("old_day") and not old_day:
         return json_error("Invalid old day. Please choose a valid OPD day.", 400)
     if data.get("old_time") and not old_time:
@@ -1073,6 +1150,7 @@ def reschedule_appointment():
         matches = find_active_firestore_appointment(
             client,
             appointment_id=appointment_id,
+            booking_id=booking_id,
             phone=phone,
             doctor=doctor,
             day=old_day,
@@ -1110,6 +1188,7 @@ def reschedule_appointment():
             patient_data = {
                 **new_slot,
                 "appointment_id": target_ref.id,
+                "booking_id": current_slot.get("booking_id", ""),
                 "doctor": new_slot["doctor"],
                 "doctor_lower": normalize_key(new_slot["doctor"]),
                 "specialty": new_slot["specialty"],
@@ -1151,6 +1230,7 @@ def reschedule_appointment():
         matches = find_matching_local_appointment(
             local_data,
             appointment_id=appointment_id,
+            booking_id=booking_id,
             phone=phone,
             doctor=doctor,
             day=old_day,
@@ -1174,6 +1254,7 @@ def reschedule_appointment():
             return json_error("Requested new slot is not available.", 404)
 
         patient_data = {
+            "booking_id": old_slot.get("booking_id", ""),
             "patient_name": old_slot.get("patient_name", ""),
             "phone": old_slot.get("phone", ""),
             "reason": old_slot.get("reason", ""),
@@ -1193,8 +1274,12 @@ def reschedule_appointment():
         {
             "success": True,
             "message": "Appointment rescheduled successfully.",
-            "old_slot": sanitize_slot(old_slot, include_patient=True),
-            "new_appointment": sanitize_slot(new_slot, include_patient=True),
+            "booking_id": new_slot.get("booking_id", ""),
+            "doctor": new_slot.get("doctor", ""),
+            "day": new_slot.get("day", ""),
+            "time": new_slot.get("time", ""),
+            "specialty": new_slot.get("specialty", ""),
+            "status": new_slot.get("status", ""),
         }
     ), 200
 
@@ -1244,8 +1329,8 @@ def get_faq():
     faq = {
         "hospital": "Sumitra Hospital OPD appointment assistant.",
         "appointment": "Appointments can be booked by sharing patient name, 10-digit phone number, doctor or specialty, day, and time.",
-        "cancellation": "Appointments can be cancelled using the appointment ID or registered 10-digit phone number.",
-        "rescheduling": "Appointments can be rescheduled only when the requested new doctor slot is available.",
+        "cancellation": "Appointments can be cancelled using the short booking ID shared at booking time.",
+        "rescheduling": "Appointments can be rescheduled using the short booking ID, only when the requested new slot is available.",
         "emergency": "For medical emergencies, please call the local emergency helpline or visit the emergency department immediately.",
         "location": "Please contact Sumitra Hospital reception for current address and directions.",
         "working_hours": "OPD schedules vary by doctor. Some specialists are available only on prior appointment.",

@@ -17,7 +17,7 @@ https://voice-agent-ai-3omf.onrender.com
 - Works with Vapi tool calls using simple JSON input and output
 - Checks doctor availability by day and specialty
 - Books appointments only after checking for double-booking conflicts
-- Cancels appointments using phone number or appointment ID
+- Cancels appointments using a short human-friendly booking ID
 - Reschedules appointments only when the new slot is actually free
 - Suggests alternate slots when the requested slot is unavailable
 - Protects the seed endpoint with `SEED_SECRET_KEY`
@@ -58,6 +58,7 @@ Appointment documents are created only when a patient books a slot. The seed end
   "phone": "9876543210",
   "reason": "General consultation",
   "status": "Booked",
+  "booking_id": "APT-7K3P",
   "booked_at": "2026-06-17T10:30:00Z",
   "cancelled_at": "",
   "rescheduled_at": "",
@@ -238,17 +239,27 @@ Request:
 
 If the same doctor/day/time is already booked, the endpoint returns `409`.
 
+The response includes a short `booking_id`, for example `APT-7K3P`. This is the only ID the voice assistant should read to the caller.
+
 ### POST `/cancel-appointment`
 
-Cancel by the caller's phone number plus appointment details:
+Cancel by booking ID:
 
 ```bash
 curl -X POST http://localhost:5000/cancel-appointment ^
   -H "Content-Type: application/json" ^
-  -d "{\"phone\":\"9876543210\",\"doctor\":\"Dr. Somya Agarwal\",\"day\":\"Tuesday\",\"time\":\"11:00 AM\"}"
+  -d "{\"booking_id\":\"APT-7K3P\"}"
 ```
 
 Request:
+
+```json
+{
+  "booking_id": "APT-7K3P"
+}
+```
+
+Phone plus appointment details are still supported as a fallback:
 
 ```json
 {
@@ -259,14 +270,6 @@ Request:
 }
 ```
 
-You can also cancel directly by appointment ID:
-
-```bash
-curl -X POST http://localhost:5000/cancel-appointment ^
-  -H "Content-Type: application/json" ^
-  -d "{\"appointment_id\":\"slot_dr_somya_agarwal_gastroenterology_tuesday_11_00_am\"}"
-```
-
 If the appointment is not found, the API returns `404`.
 
 ### POST `/reschedule-appointment`
@@ -274,21 +277,20 @@ If the appointment is not found, the API returns `404`.
 ```bash
 curl -X POST http://localhost:5000/reschedule-appointment ^
   -H "Content-Type: application/json" ^
-  -d "{\"phone\":\"9876543210\",\"old_day\":\"Tuesday\",\"old_time\":\"11:00 AM\",\"new_day\":\"Wednesday\",\"new_time\":\"10:00 AM\",\"doctor\":\"Dr. Somya Agarwal\"}"
+  -d "{\"booking_id\":\"APT-7K3P\",\"new_day\":\"Wednesday\",\"new_time\":\"10:00 AM\"}"
 ```
 
 Request:
 
 ```json
 {
-  "phone": "9876543210",
-  "old_day": "Tuesday",
-  "old_time": "11:00 AM",
+  "booking_id": "APT-7K3P",
   "new_day": "Wednesday",
-  "new_time": "10:00 AM",
-  "doctor": "Dr. Somya Agarwal"
+  "new_time": "10:00 AM"
 }
 ```
+
+Phone plus old appointment details are still supported as a fallback.
 
 The API checks the new slot before rescheduling. If the new slot is already booked, it returns `409`.
 
@@ -368,13 +370,11 @@ Response body properties:
 
 - `success` boolean
 - `message` string
-- `appointment` object
-- `appointment.appointment_id` string
-- `appointment.doctor` string
-- `appointment.specialty` string
-- `appointment.day` string
-- `appointment.time` string
-- `appointment.status` string
+- `booking_id` string, example `APT-7K3P`
+- `doctor` string
+- `specialty` string
+- `day` string
+- `time` string
 
 #### `cancelAppointment`
 
@@ -386,20 +386,17 @@ POST https://voice-agent-ai-3omf.onrender.com/cancel-appointment
 
 Request body properties:
 
-- `phone` string, required unless `appointment_id` is provided
-- `doctor` string, optional but recommended
-- `day` string, optional but recommended
-- `time` string, optional but recommended
-- `appointment_id` string, optional
+- `booking_id` string, required for the recommended flow
+- `phone` string, optional fallback
+- `doctor` string, optional fallback
+- `day` string, optional fallback
+- `time` string, optional fallback
 
 Recommended Vapi request body:
 
 ```json
 {
-  "phone": "9876543210",
-  "doctor": "Dr. Somya Agarwal",
-  "day": "Tuesday",
-  "time": "11:00 AM"
+  "booking_id": "APT-7K3P"
 }
 ```
 
@@ -407,9 +404,12 @@ Response body properties:
 
 - `success` boolean
 - `message` string
-- `appointment` object
-- `appointment.status` string
-- `appointment.cancelled_at` string
+- `booking_id` string
+- `doctor` string
+- `specialty` string
+- `day` string
+- `time` string
+- `status` string
 
 #### `rescheduleAppointment`
 
@@ -421,13 +421,13 @@ POST https://voice-agent-ai-3omf.onrender.com/reschedule-appointment
 
 Request body properties:
 
-- `phone` string, required unless `appointment_id` is provided
-- `doctor` string, required for the simple Vapi flow
-- `old_day` string, required for the simple Vapi flow
-- `old_time` string, required for the simple Vapi flow
+- `booking_id` string, required for the recommended flow
 - `new_day` string, required
 - `new_time` string, required
-- `appointment_id` string, optional
+- `phone` string, optional fallback
+- `doctor` string, optional fallback
+- `old_day` string, optional fallback
+- `old_time` string, optional fallback
 - `new_doctor` string, optional
 - `new_specialty` string, optional
 
@@ -435,12 +435,9 @@ Recommended Vapi request body:
 
 ```json
 {
-  "phone": "9876543210",
-  "old_day": "Tuesday",
-  "old_time": "11:00 AM",
+  "booking_id": "APT-7K3P",
   "new_day": "Wednesday",
-  "new_time": "10:00 AM",
-  "doctor": "Dr. Somya Agarwal"
+  "new_time": "10:00 AM"
 }
 ```
 
@@ -448,12 +445,14 @@ Response body properties:
 
 - `success` boolean
 - `message` string
-- `old_slot` object
-- `new_appointment` object
-- `new_appointment.day` string
-- `new_appointment.time` string
-- `new_appointment.status` string
-- `new_appointment.rescheduled_at` string
+- `booking_id` string
+- `doctor` string
+- `specialty` string
+- `day` string
+- `time` string
+- `status` string
+
+Important Vapi prompt rule: the assistant should read only the `booking_id` to the caller. It should never read raw Firestore document IDs.
 
 The backend supports plain JSON request bodies and common Vapi `arguments` payloads, so it can work both from curl/Postman and from the voice assistant.
 
