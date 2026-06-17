@@ -393,6 +393,26 @@ def build_slot_documents():
     return slots
 
 
+def schedule_allows_slot(doctor, day, time_text):
+    if doctor.get("availabilityType") != "Scheduled":
+        return False
+    if day not in doctor.get("days", []):
+        return False
+    return time_text in iter_slot_times(doctor.get("startTime", ""), doctor.get("endTime", ""))
+
+
+def doctor_matches_filters(doctor, day=None, specialty=None, doctor_name=None):
+    if doctor.get("availabilityType") != "Scheduled":
+        return False
+    if day and day not in doctor.get("days", []):
+        return False
+    if specialty and normalize_key(doctor.get("specialty")) != normalize_key(specialty):
+        return False
+    if doctor_name and normalize_key(doctor.get("name")) != normalize_key(doctor_name):
+        return False
+    return True
+
+
 def seed_local_data():
     doctors = build_doctor_documents()
     existing_data = load_local_database()
@@ -453,51 +473,20 @@ def sort_slots(slots):
 
 def seed_firestore_data(client):
     doctors = build_doctor_documents()
-    slots = build_slot_documents()
     seeded_doctors = 0
-    seeded_slots = 0
-
-    batch = client.batch()
-    pending_writes = 0
 
     for doctor in doctors:
         ref = client.collection("doctors").document(doctor["doctor_id"])
-        batch.set(ref, doctor, merge=True)
-        pending_writes += 1
+        ref.set(doctor, merge=True)
         seeded_doctors += 1
+        logger.info("Seeded doctor %s (%s)", doctor["name"], doctor["specialty"])
 
-    for slot in slots:
-        ref = client.collection("appointments").document(slot["appointment_id"])
-        existing = ref.get()
-        if existing.exists:
-            current = existing.to_dict() or {}
-            update_data = {
-                "doctor": slot["doctor"],
-                "doctor_lower": slot["doctor_lower"],
-                "specialty": slot["specialty"],
-                "specialty_lower": slot["specialty_lower"],
-                "day": slot["day"],
-                "time": slot["time"],
-                "availabilityType": slot["availabilityType"],
-                "source": SOURCE_NAME,
-            }
-            if current.get("status") not in {"Booked", "Available"}:
-                update_data.update(slot)
-            batch.set(ref, update_data, merge=True)
-        else:
-            batch.set(ref, slot)
-        pending_writes += 1
-        seeded_slots += 1
-
-        if pending_writes >= 450:
-            batch.commit()
-            batch = client.batch()
-            pending_writes = 0
-
-    if pending_writes:
-        batch.commit()
-
-    return {"doctor_count": seeded_doctors, "slot_count": seeded_slots, "database": "Firestore"}
+    return {
+        "doctor_count": seeded_doctors,
+        "appointment_slot_count": 0,
+        "database": "Firestore",
+        "note": "Only doctors were seeded. Appointment documents are created when a user books.",
+    }
 
 
 def seed_secret_is_valid(data):
@@ -539,6 +528,86 @@ def firestore_slots_for_query(client, day=None, specialty=None, doctor=None, sta
     return sort_slots(slots)
 
 
+def firestore_doctors_for_query(client, day=None, specialty=None, doctor=None):
+    specialty_key = normalize_key(specialty)
+    doctor_key = normalize_key(doctor)
+    doctors = []
+
+    for doc in client.collection("doctors").stream():
+        doctor_data = doc.to_dict() or {}
+        doctor_data["doctor_id"] = doc.id
+        if not doctor_matches_filters(doctor_data, day=day):
+            continue
+        if specialty_key and normalize_key(doctor_data.get("specialty")) != specialty_key:
+            continue
+        if doctor_key and normalize_key(doctor_data.get("name")) != doctor_key:
+            continue
+        doctors.append(doctor_data)
+
+    return doctors
+
+
+def firestore_booked_slots_for_query(client, day=None, specialty=None, doctor=None):
+    query = client.collection("appointments")
+    if day:
+        query = apply_firestore_filter(query, "day", "==", day)
+    else:
+        query = apply_firestore_filter(query, "status", "==", "Booked")
+
+    specialty_key = normalize_key(specialty)
+    doctor_key = normalize_key(doctor)
+    booked_slots = []
+
+    for doc in query.stream():
+        slot = doc.to_dict() or {}
+        slot["appointment_id"] = doc.id
+        if slot.get("status") != "Booked":
+            continue
+        if specialty_key and normalize_key(slot.get("specialty")) != specialty_key:
+            continue
+        if doctor_key and normalize_key(slot.get("doctor")) != doctor_key:
+            continue
+        booked_slots.append(slot)
+
+    return booked_slots
+
+
+def build_available_slots_from_doctors(doctors, booked_slots, day=None):
+    booked_ids = {slot_doc_id(slot.get("doctor"), slot.get("specialty"), slot.get("day"), slot.get("time")) for slot in booked_slots}
+    available_slots = []
+
+    for doctor in doctors:
+        days = [day] if day else doctor.get("days", [])
+        for slot_day in days:
+            if slot_day not in doctor.get("days", []):
+                continue
+            for slot_time in iter_slot_times(doctor.get("startTime", ""), doctor.get("endTime", "")):
+                appointment_id = slot_doc_id(doctor["name"], doctor["specialty"], slot_day, slot_time)
+                if appointment_id in booked_ids:
+                    continue
+                available_slots.append(
+                    {
+                        "appointment_id": appointment_id,
+                        "doctor": doctor["name"],
+                        "doctor_lower": normalize_key(doctor["name"]),
+                        "specialty": doctor["specialty"],
+                        "specialty_lower": normalize_key(doctor["specialty"]),
+                        "day": slot_day,
+                        "time": slot_time,
+                        "status": "Available",
+                        "source": doctor.get("source", SOURCE_NAME),
+                    }
+                )
+
+    return sort_slots(available_slots)
+
+
+def firestore_available_slots_for_query(client, day=None, specialty=None, doctor=None):
+    doctors = firestore_doctors_for_query(client, day=day, specialty=specialty, doctor=doctor)
+    booked_slots = firestore_booked_slots_for_query(client, day=day, specialty=specialty, doctor=doctor)
+    return build_available_slots_from_doctors(doctors, booked_slots, day=day)
+
+
 def local_slots_for_query(day=None, specialty=None, doctor=None, status=None):
     data = ensure_local_data()
     specialty_key = normalize_key(specialty)
@@ -578,10 +647,29 @@ def prior_appointment_doctors(specialty=None):
 
 
 def find_firestore_slot(client, doctor, specialty, day, time_text):
-    slots = firestore_slots_for_query(client, day=day, specialty=specialty, doctor=doctor)
-    for slot in slots:
-        if slot.get("time") == time_text:
-            return client.collection("appointments").document(slot["appointment_id"]), slot
+    doctors = firestore_doctors_for_query(client, day=day, specialty=specialty, doctor=doctor)
+    for doctor_data in doctors:
+        if schedule_allows_slot(doctor_data, day, time_text):
+            appointment_id = slot_doc_id(doctor_data["name"], doctor_data["specialty"], day, time_text)
+            slot = {
+                "appointment_id": appointment_id,
+                "doctor": doctor_data["name"],
+                "doctor_lower": normalize_key(doctor_data["name"]),
+                "specialty": doctor_data["specialty"],
+                "specialty_lower": normalize_key(doctor_data["specialty"]),
+                "day": day,
+                "time": time_text,
+                "patient_name": "",
+                "phone": "",
+                "reason": "",
+                "status": "Available",
+                "booked_at": "",
+                "cancelled_at": "",
+                "rescheduled_at": "",
+                "availabilityType": doctor_data.get("availabilityType", "Scheduled"),
+                "source": doctor_data.get("source", SOURCE_NAME),
+            }
+            return client.collection("appointments").document(appointment_id), slot
     return None, None
 
 
@@ -746,7 +834,7 @@ def check_availability():
 
     client = get_firebase_client()
     if client:
-        slots = firestore_slots_for_query(client, day=day, specialty=specialty, status="Available")
+        slots = firestore_available_slots_for_query(client, day=day, specialty=specialty)
     else:
         slots = local_slots_for_query(day=day, specialty=specialty, status="Available")
 
@@ -792,10 +880,18 @@ def book_appointment():
             current = snapshot.to_dict() or {}
             if current.get("status") == "Booked":
                 raise BookingConflict("Requested slot is already booked.")
-            if current.get("status") != "Available":
+            if snapshot.exists and current.get("status") not in {"Available", "Cancelled", "Rescheduled"}:
                 raise SlotNotFound("Requested slot is not available.")
 
-            update_data = {
+            booked_data = {
+                **slot,
+                "appointment_id": ref.id,
+                "doctor": slot["doctor"],
+                "doctor_lower": normalize_key(slot["doctor"]),
+                "specialty": slot["specialty"],
+                "specialty_lower": normalize_key(slot["specialty"]),
+                "day": slot["day"],
+                "time": slot["time"],
                 "patient_name": payload["name"],
                 "phone": payload["phone"],
                 "reason": payload["reason"],
@@ -803,11 +899,10 @@ def book_appointment():
                 "booked_at": now,
                 "cancelled_at": "",
                 "rescheduled_at": "",
+                "source": SOURCE_NAME,
             }
-            transaction.update(ref, update_data)
-            current.update(update_data)
-            current["appointment_id"] = ref.id
-            return current
+            transaction.set(ref, booked_data)
+            return booked_data
 
         try:
             booked_slot = book_in_transaction(transaction, slot_ref)
@@ -872,15 +967,11 @@ def cancel_appointment():
         ref, slot = matches[0]
         ref.update(
             {
-                "patient_name": "",
-                "phone": "",
-                "reason": "",
-                "status": "Available",
-                "booked_at": "",
+                "status": "Cancelled",
                 "cancelled_at": now,
             }
         )
-        slot.update({"status": "Available", "patient_name": "", "phone": "", "reason": "", "booked_at": "", "cancelled_at": now})
+        slot.update({"status": "Cancelled", "cancelled_at": now})
 
     else:
         local_data = ensure_local_data()
@@ -961,10 +1052,18 @@ def reschedule_appointment():
                 raise SlotNotFound("Current appointment is not active.")
             if target_slot.get("status") == "Booked":
                 raise BookingConflict("Requested new slot is already booked.")
-            if target_slot.get("status") != "Available":
+            if target_snapshot.exists and target_slot.get("status") not in {"Available", "Cancelled", "Rescheduled"}:
                 raise SlotNotFound("Requested new slot is not available.")
 
             patient_data = {
+                **new_slot,
+                "appointment_id": target_ref.id,
+                "doctor": new_slot["doctor"],
+                "doctor_lower": normalize_key(new_slot["doctor"]),
+                "specialty": new_slot["specialty"],
+                "specialty_lower": normalize_key(new_slot["specialty"]),
+                "day": new_slot["day"],
+                "time": new_slot["time"],
                 "patient_name": current_slot.get("patient_name", ""),
                 "phone": current_slot.get("phone", ""),
                 "reason": current_slot.get("reason", ""),
@@ -972,22 +1071,20 @@ def reschedule_appointment():
                 "booked_at": now,
                 "cancelled_at": "",
                 "rescheduled_at": now,
+                "source": SOURCE_NAME,
             }
             transaction.update(
                 current_ref,
                 {
-                    "patient_name": "",
-                    "phone": "",
-                    "reason": "",
-                    "status": "Available",
-                    "booked_at": "",
+                    "status": "Rescheduled",
                     "rescheduled_at": now,
                 },
             )
-            transaction.update(target_ref, patient_data)
-            target_slot.update(patient_data)
+            transaction.set(target_ref, patient_data)
+            target_slot = patient_data
             current_slot["appointment_id"] = current_ref.id
-            target_slot["appointment_id"] = target_ref.id
+            current_slot["status"] = "Rescheduled"
+            current_slot["rescheduled_at"] = now
             return current_slot, target_slot
 
         try:
@@ -1058,7 +1155,7 @@ def get_alternate_slots():
 
     client = get_firebase_client()
     if client:
-        slots = firestore_slots_for_query(client, specialty=specialty, doctor=doctor, status="Available")
+        slots = firestore_available_slots_for_query(client, specialty=specialty, doctor=doctor)
     else:
         slots = local_slots_for_query(specialty=specialty, doctor=doctor, status="Available")
 

@@ -12,7 +12,7 @@ https://voice-agent-ai-3omf.onrender.com
 
 ## Features
 
-- Stores doctors and appointment slots in Firebase Firestore
+- Stores doctors and booked appointments in Firebase Firestore
 - Seeds real OPD schedule data from the Sumitra Hospital timetable
 - Works with Vapi tool calls using simple JSON input and output
 - Checks doctor availability by day and specialty
@@ -46,7 +46,7 @@ Doctors with "On Prior Appointment" availability are stored in `doctors`, but re
 
 ### Collection: `appointments`
 
-Each document represents one bookable OPD slot.
+Appointment documents are created only when a patient books a slot. The seed endpoint does not pre-create appointment slots, which keeps deployment lightweight on Render's free tier.
 
 ```json
 {
@@ -54,18 +54,18 @@ Each document represents one bookable OPD slot.
   "specialty": "Cardiology",
   "day": "Monday",
   "time": "5:00 PM",
-  "patient_name": "",
-  "phone": "",
-  "reason": "",
-  "status": "Available",
-  "booked_at": "",
+  "patient_name": "Pratik Raj",
+  "phone": "9876543210",
+  "reason": "General consultation",
+  "status": "Booked",
+  "booked_at": "2026-06-17T10:30:00Z",
   "cancelled_at": "",
   "rescheduled_at": "",
   "source": "Sumitra Hospital OPD timetable"
 }
 ```
 
-When a slot is booked, the same appointment document is updated to `status: "Booked"` with patient details.
+Availability is calculated from the `doctors` schedule and active booked appointments.
 
 ## OPD Timetable Source
 
@@ -186,7 +186,7 @@ curl http://localhost:5000/health
 
 ### POST `/seed-data`
 
-Seeds the real Sumitra Hospital OPD timetable into Firestore.
+Seeds the real Sumitra Hospital OPD timetable into the `doctors` collection. It does not create appointment slot documents.
 
 ```bash
 curl -X POST http://localhost:5000/seed-data ^
@@ -340,7 +340,7 @@ SEED_SECRET_KEY=<your private seed key>
 ```
 
 6. Deploy.
-7. Run `/seed-data` once after deployment to insert the Sumitra Hospital OPD timetable into Firestore.
+7. Run `/seed-data` once after deployment to insert the Sumitra Hospital OPD timetable into the `doctors` collection.
 
 Render seed command example:
 
@@ -390,7 +390,7 @@ Run the same booking command again. It should return:
 ## Limitations
 
 - The timetable is weekday-based, so it does not yet handle calendar dates, holidays, or doctor leave.
-- Slot generation uses one-hour blocks from the OPD timing range.
+- Availability uses one-hour blocks from the OPD timing range.
 - Doctors marked "On Prior Appointment" are saved in Firestore, but automatic slots are not created for them.
 - The timetable data is used as publicly available schedule information for this assignment/demo. It should be verified with the hospital before real-world use.
 - `appointments.json` is only for local fallback. Firestore is the intended production database.
