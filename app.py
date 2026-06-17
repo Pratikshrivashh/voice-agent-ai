@@ -699,14 +699,29 @@ def find_active_local_appointment(data, appointment_id=None, phone=None):
     return matches
 
 
-def find_active_firestore_appointment(client, appointment_id=None, phone=None):
+def appointment_matches(slot, doctor=None, day=None, time_text=None):
+    if doctor and normalize_key(slot.get("doctor")) != normalize_key(doctor):
+        return False
+    if day and slot.get("day") != day:
+        return False
+    if time_text and slot.get("time") != time_text:
+        return False
+    return True
+
+
+def find_matching_local_appointment(data, appointment_id=None, phone=None, doctor=None, day=None, time_text=None):
+    matches = find_active_local_appointment(data, appointment_id=appointment_id, phone=phone)
+    return [(index, slot) for index, slot in matches if appointment_matches(slot, doctor=doctor, day=day, time_text=time_text)]
+
+
+def find_active_firestore_appointment(client, appointment_id=None, phone=None, doctor=None, day=None, time_text=None):
     if appointment_id:
         ref = client.collection("appointments").document(appointment_id)
         snapshot = ref.get()
         if snapshot.exists:
             slot = snapshot.to_dict() or {}
             slot["appointment_id"] = snapshot.id
-            if slot.get("status") == "Booked":
+            if slot.get("status") == "Booked" and appointment_matches(slot, doctor=doctor, day=day, time_text=time_text):
                 return [(ref, slot)]
         return []
 
@@ -718,6 +733,8 @@ def find_active_firestore_appointment(client, appointment_id=None, phone=None):
             if slot.get("status") != "Booked":
                 continue
             slot["appointment_id"] = doc.id
+            if not appointment_matches(slot, doctor=doctor, day=day, time_text=time_text):
+                continue
             matches.append((client.collection("appointments").document(doc.id), slot))
         return matches
 
@@ -951,15 +968,29 @@ def cancel_appointment():
     data = get_request_data()
     appointment_id = normalize_text(data.get("appointment_id"))
     phone = normalize_text(data.get("phone"))
+    doctor = normalize_text(data.get("doctor"))
+    day = normalize_day(data.get("day")) if data.get("day") else None
+    appointment_time = format_time(data.get("time")) if data.get("time") else None
 
     if not appointment_id and not is_valid_phone(phone):
         return json_error("Provide appointment_id or a valid 10-digit phone number.", 400)
+    if data.get("day") and not day:
+        return json_error("Invalid day. Please choose a valid OPD day.", 400)
+    if data.get("time") and not appointment_time:
+        return json_error("Invalid time format. Use values like 11:00 AM.", 400)
 
     client = get_firebase_client()
     now = utc_now()
 
     if client:
-        matches = find_active_firestore_appointment(client, appointment_id=appointment_id, phone=phone)
+        matches = find_active_firestore_appointment(
+            client,
+            appointment_id=appointment_id,
+            phone=phone,
+            doctor=doctor,
+            day=day,
+            time_text=appointment_time,
+        )
         lookup_error = appointment_lookup_error(matches)
         if lookup_error:
             return lookup_error
@@ -975,7 +1006,14 @@ def cancel_appointment():
 
     else:
         local_data = ensure_local_data()
-        matches = find_active_local_appointment(local_data, appointment_id=appointment_id, phone=phone)
+        matches = find_matching_local_appointment(
+            local_data,
+            appointment_id=appointment_id,
+            phone=phone,
+            doctor=doctor,
+            day=day,
+            time_text=appointment_time,
+        )
         lookup_error = appointment_lookup_error(matches)
         if lookup_error:
             return lookup_error
@@ -1009,7 +1047,10 @@ def reschedule_appointment():
     data = get_request_data()
     appointment_id = normalize_text(data.get("appointment_id"))
     phone = normalize_text(data.get("phone"))
-    new_doctor = normalize_text(data.get("new_doctor") or data.get("doctor"))
+    doctor = normalize_text(data.get("doctor"))
+    old_day = normalize_day(data.get("old_day")) if data.get("old_day") else None
+    old_time = format_time(data.get("old_time")) if data.get("old_time") else None
+    new_doctor = normalize_text(data.get("new_doctor") or doctor)
     new_specialty = normalize_text(data.get("new_specialty") or data.get("specialty"))
     new_day = normalize_day(data.get("new_day") or data.get("day"))
     new_time = format_time(data.get("new_time") or data.get("time"))
@@ -1017,6 +1058,10 @@ def reschedule_appointment():
 
     if not appointment_id and not is_valid_phone(phone):
         return json_error("Provide appointment_id or a valid 10-digit phone number.", 400)
+    if data.get("old_day") and not old_day:
+        return json_error("Invalid old day. Please choose a valid OPD day.", 400)
+    if data.get("old_time") and not old_time:
+        return json_error("Invalid old time format. Use values like 11:00 AM.", 400)
     if not new_day:
         return json_error("Invalid new day. Please choose a valid OPD day.", 400)
     if not new_time:
@@ -1025,7 +1070,14 @@ def reschedule_appointment():
     client = get_firebase_client()
 
     if client:
-        matches = find_active_firestore_appointment(client, appointment_id=appointment_id, phone=phone)
+        matches = find_active_firestore_appointment(
+            client,
+            appointment_id=appointment_id,
+            phone=phone,
+            doctor=doctor,
+            day=old_day,
+            time_text=old_time,
+        )
         lookup_error = appointment_lookup_error(matches)
         if lookup_error:
             return lookup_error
@@ -1096,7 +1148,14 @@ def reschedule_appointment():
 
     else:
         local_data = ensure_local_data()
-        matches = find_active_local_appointment(local_data, appointment_id=appointment_id, phone=phone)
+        matches = find_matching_local_appointment(
+            local_data,
+            appointment_id=appointment_id,
+            phone=phone,
+            doctor=doctor,
+            day=old_day,
+            time_text=old_time,
+        )
         lookup_error = appointment_lookup_error(matches)
         if lookup_error:
             return lookup_error

@@ -240,30 +240,12 @@ If the same doctor/day/time is already booked, the endpoint returns `409`.
 
 ### POST `/cancel-appointment`
 
-Cancel by appointment ID:
+Cancel by the caller's phone number plus appointment details:
 
 ```bash
 curl -X POST http://localhost:5000/cancel-appointment ^
   -H "Content-Type: application/json" ^
-  -d "{\"appointment_id\":\"slot_dr_ayushi_agarwal_cardiology_monday_5_00_pm\"}"
-```
-
-Cancel by phone:
-
-```bash
-curl -X POST http://localhost:5000/cancel-appointment ^
-  -H "Content-Type: application/json" ^
-  -d "{\"phone\":\"9876543210\"}"
-```
-
-If one phone has multiple active appointments, the API returns `409` and asks for `appointment_id`.
-
-### POST `/reschedule-appointment`
-
-```bash
-curl -X POST http://localhost:5000/reschedule-appointment ^
-  -H "Content-Type: application/json" ^
-  -d "{\"phone\":\"9876543210\",\"new_doctor\":\"Dr. Ayushi Agarwal\",\"new_specialty\":\"Cardiology\",\"new_day\":\"Wednesday\",\"new_time\":\"5:00 PM\"}"
+  -d "{\"phone\":\"9876543210\",\"doctor\":\"Dr. Somya Agarwal\",\"day\":\"Tuesday\",\"time\":\"11:00 AM\"}"
 ```
 
 Request:
@@ -271,12 +253,44 @@ Request:
 ```json
 {
   "phone": "9876543210",
-  "new_doctor": "Dr. Ayushi Agarwal",
-  "new_specialty": "Cardiology",
-  "new_day": "Wednesday",
-  "new_time": "5:00 PM"
+  "doctor": "Dr. Somya Agarwal",
+  "day": "Tuesday",
+  "time": "11:00 AM"
 }
 ```
+
+You can also cancel directly by appointment ID:
+
+```bash
+curl -X POST http://localhost:5000/cancel-appointment ^
+  -H "Content-Type: application/json" ^
+  -d "{\"appointment_id\":\"slot_dr_somya_agarwal_gastroenterology_tuesday_11_00_am\"}"
+```
+
+If the appointment is not found, the API returns `404`.
+
+### POST `/reschedule-appointment`
+
+```bash
+curl -X POST http://localhost:5000/reschedule-appointment ^
+  -H "Content-Type: application/json" ^
+  -d "{\"phone\":\"9876543210\",\"old_day\":\"Tuesday\",\"old_time\":\"11:00 AM\",\"new_day\":\"Wednesday\",\"new_time\":\"10:00 AM\",\"doctor\":\"Dr. Somya Agarwal\"}"
+```
+
+Request:
+
+```json
+{
+  "phone": "9876543210",
+  "old_day": "Tuesday",
+  "old_time": "11:00 AM",
+  "new_day": "Wednesday",
+  "new_time": "10:00 AM",
+  "doctor": "Dr. Somya Agarwal"
+}
+```
+
+The API checks the new slot before rescheduling. If the new slot is already booked, it returns `409`.
 
 ### POST `/get-alternate-slots`
 
@@ -306,13 +320,140 @@ POST https://voice-agent-ai-3omf.onrender.com/get-alternate-slots
 GET  https://voice-agent-ai-3omf.onrender.com/get-faq
 ```
 
-Recommended Vapi tool parameters:
+### Vapi Tool Setup
 
-- `check-availability`: `day`, optional `specialty`
-- `book-appointment`: `name`, `phone`, `doctor`, `specialty`, `day`, `time`, optional `reason`
-- `cancel-appointment`: `appointment_id` or `phone`
-- `reschedule-appointment`: `appointment_id` or `phone`, `new_doctor`, `new_specialty`, `new_day`, `new_time`
-- `get-alternate-slots`: optional `doctor`, optional `specialty`, optional `day`, optional `time`
+Use these tool names in Vapi so the assistant prompt stays readable.
+
+#### `checkAvailability`
+
+URL:
+
+```text
+POST https://voice-agent-ai-3omf.onrender.com/check-availability
+```
+
+Request body properties:
+
+- `day` string, required, example `Monday`
+- `specialty` string, optional, example `Cardiology`
+
+Response body properties:
+
+- `success` boolean
+- `day` string
+- `specialty` string or null
+- `available_slots` array
+- `is_available` boolean
+- `prior_appointment_doctors` array
+
+#### `bookAppointment`
+
+URL:
+
+```text
+POST https://voice-agent-ai-3omf.onrender.com/book-appointment
+```
+
+Request body properties:
+
+- `name` string, required
+- `phone` string, required, 10 digits
+- `doctor` string, required
+- `specialty` string, required
+- `day` string, required
+- `time` string, required
+- `reason` string, optional
+
+Response body properties:
+
+- `success` boolean
+- `message` string
+- `appointment` object
+- `appointment.appointment_id` string
+- `appointment.doctor` string
+- `appointment.specialty` string
+- `appointment.day` string
+- `appointment.time` string
+- `appointment.status` string
+
+#### `cancelAppointment`
+
+URL:
+
+```text
+POST https://voice-agent-ai-3omf.onrender.com/cancel-appointment
+```
+
+Request body properties:
+
+- `phone` string, required unless `appointment_id` is provided
+- `doctor` string, optional but recommended
+- `day` string, optional but recommended
+- `time` string, optional but recommended
+- `appointment_id` string, optional
+
+Recommended Vapi request body:
+
+```json
+{
+  "phone": "9876543210",
+  "doctor": "Dr. Somya Agarwal",
+  "day": "Tuesday",
+  "time": "11:00 AM"
+}
+```
+
+Response body properties:
+
+- `success` boolean
+- `message` string
+- `appointment` object
+- `appointment.status` string
+- `appointment.cancelled_at` string
+
+#### `rescheduleAppointment`
+
+URL:
+
+```text
+POST https://voice-agent-ai-3omf.onrender.com/reschedule-appointment
+```
+
+Request body properties:
+
+- `phone` string, required unless `appointment_id` is provided
+- `doctor` string, required for the simple Vapi flow
+- `old_day` string, required for the simple Vapi flow
+- `old_time` string, required for the simple Vapi flow
+- `new_day` string, required
+- `new_time` string, required
+- `appointment_id` string, optional
+- `new_doctor` string, optional
+- `new_specialty` string, optional
+
+Recommended Vapi request body:
+
+```json
+{
+  "phone": "9876543210",
+  "old_day": "Tuesday",
+  "old_time": "11:00 AM",
+  "new_day": "Wednesday",
+  "new_time": "10:00 AM",
+  "doctor": "Dr. Somya Agarwal"
+}
+```
+
+Response body properties:
+
+- `success` boolean
+- `message` string
+- `old_slot` object
+- `new_appointment` object
+- `new_appointment.day` string
+- `new_appointment.time` string
+- `new_appointment.status` string
+- `new_appointment.rescheduled_at` string
 
 The backend supports plain JSON request bodies and common Vapi `arguments` payloads, so it can work both from curl/Postman and from the voice assistant.
 
