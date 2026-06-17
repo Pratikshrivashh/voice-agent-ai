@@ -1,47 +1,4 @@
 {
-  "available_slots": {
-    "Monday": [
-      "9:00 AM",
-      "10:00 AM",
-      "2:00 PM",
-      "4:00 PM"
-    ],
-    "Tuesday": [
-      "9:30 AM",
-      "11:00 AM",
-      "3:00 PM",
-      "5:00 PM"
-    ],
-    "Wednesday": [
-      "10:00 AM",
-      "12:00 PM",
-      "2:30 PM",
-      "4:30 PM"
-    ],
-    "Thursday": [
-      "9:00 AM",
-      "11:30 AM",
-      "1:00 PM",
-      "3:30 PM"
-    ],
-    "Friday": [
-      "10:30 AM",
-      "12:30 PM",
-      "2:00 PM",
-      "5:30 PM"
-    ]
-  },
-  "booked_appointments": [
-    {
-      "appointment_id": "APT-20260617080754-E56F66",
-      "name": "Pratik Raj",
-      "phone": "9876543210",
-      "day": "Monday",
-      "time": "9:00 AM",
-      "reason": "General Checkup",
-      "status": "cancelled",
-      "created_at": "2026-06-17T08:07:54.231732Z",
-      "cancelled_at": "2026-06-17T08:09:20.506450Z"
-    }
-  ]
+  "doctors": [],
+  "appointments": []
 }

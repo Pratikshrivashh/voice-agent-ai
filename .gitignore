@@ -12,6 +12,10 @@ ENV/
 # Environment variables and local secrets
 .env
 .env.*
+*firebase-adminsdk*.json
+serviceAccountKey.json
+firebase-service-account.json
+*.credentials.json
 
 # Flask and local runtime files
 instance/

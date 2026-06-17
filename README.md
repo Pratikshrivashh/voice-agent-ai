@@ -1,67 +1,166 @@
-# Flask Voice AI Clinic Appointment Backend
+# Sumitra Hospital Voice AI Appointment Backend
 
-A Flask backend for a Vapi Voice AI clinic appointment booking assistant. The API lets a voice agent check availability, book, cancel, reschedule, answer FAQs, and suggest alternate slots. Appointment data is stored in `appointments.json`, which makes the project simple to run locally and easy to deploy for demos.
+This project is a small but practical backend for a hospital appointment booking voice assistant. The idea is simple: a caller can speak to a Vapi assistant, ask for a doctor or department, check OPD availability, and book, cancel, or reschedule an appointment.
+
+The backend is built with Flask and uses Firebase Firestore for storing doctors and appointment slots. Instead of using random demo data, the seed data is based on the publicly available Sumitra Hospital OPD timetable used for this assignment.
+
+Current deployed backend:
+
+```text
+https://voice-agent-ai-3omf.onrender.com
+```
 
 ## Features
 
-- 7 JSON API endpoints built for Vapi voice tools
-- Appointment availability checks for Monday to Friday
-- Booking with name, phone number, day, time, and reason
-- Cancellation by registered phone number
-- Rescheduling with automatic slot release and rebooking
-- FAQ endpoint for clinic information
-- Alternate slot suggestions
-- Input validation for day, clinic time, and 10-digit phone numbers
-- Render deployment support with `Procfile` and `gunicorn`
+- Stores doctors and appointment slots in Firebase Firestore
+- Seeds real OPD schedule data from the Sumitra Hospital timetable
+- Works with Vapi tool calls using simple JSON input and output
+- Checks doctor availability by day and specialty
+- Books appointments only after checking for double-booking conflicts
+- Cancels appointments using phone number or appointment ID
+- Reschedules appointments only when the new slot is actually free
+- Suggests alternate slots when the requested slot is unavailable
+- Protects the seed endpoint with `SEED_SECRET_KEY`
+- Falls back to `appointments.json` locally if Firebase credentials are not configured
+- Runs on Render with `gunicorn`
 
-## Project Structure
+## Firestore Structure
+
+### Collection: `doctors`
+
+Each document represents one doctor schedule entry.
+
+```json
+{
+  "name": "Dr. Ayushi Agarwal",
+  "specialty": "Cardiology",
+  "days": ["Monday", "Wednesday", "Friday"],
+  "startTime": "5:00 PM",
+  "endTime": "6:00 PM",
+  "availabilityType": "Scheduled",
+  "source": "Sumitra Hospital OPD timetable"
+}
+```
+
+Doctors with "On Prior Appointment" availability are stored in `doctors`, but regular bookable slots are not generated for them.
+
+### Collection: `appointments`
+
+Each document represents one bookable OPD slot.
+
+```json
+{
+  "doctor": "Dr. Ayushi Agarwal",
+  "specialty": "Cardiology",
+  "day": "Monday",
+  "time": "5:00 PM",
+  "patient_name": "",
+  "phone": "",
+  "reason": "",
+  "status": "Available",
+  "booked_at": "",
+  "cancelled_at": "",
+  "rescheduled_at": "",
+  "source": "Sumitra Hospital OPD timetable"
+}
+```
+
+When a slot is booked, the same appointment document is updated to `status: "Booked"` with patient details.
+
+## OPD Timetable Source
+
+The doctor schedule used in this project is based on the Sumitra Hospital OPD timetable that was provided for the assignment and is treated as publicly available hospital schedule information. No private patient data is used in the seed data.
+
+To make the data source clear inside Firestore, every seeded doctor and appointment slot stores this label:
 
 ```text
-voice-agent/
-|-- app.py
-|-- appointments.json
-|-- requirements.txt
-|-- Procfile
-|-- .gitignore
-`-- README.md
+Sumitra Hospital OPD timetable
 ```
 
-## Installation And Setup
+Doctors included in the seed data:
 
-Clone the repository:
+- Dr. Rajesh Goel, Nephrology, Sunday, 11:00 AM to 12:00 PM
+- Dr. Somya Agarwal, Gastroenterology, Monday to Friday, 10:00 AM to 12:00 PM
+- Dr. Ayushi Agarwal, Cardiology, Monday, Wednesday, Friday, 5:00 PM to 6:00 PM
+- Dr. Vikas Bansal, Urology, Monday, Wednesday, Friday, 5:00 PM to 6:00 PM
+- Dr. Rekha Mittal, Paediatric Neurology, Monday, Friday, 3:00 PM to 4:00 PM
+- Dr. Shazia Zaidi, Dermatology & Venereology, Tuesday, Thursday, Saturday, 12:00 PM to 1:00 PM
+- Dr. Neha Saini, Dental, Monday to Saturday, 10:00 AM to 6:00 PM
+- Dr. Jyoti Bhatia, Physiotherapy, Monday to Saturday, 10:00 AM to 5:00 PM
+- Dr. Nitin Kumar Rai, Neurology, Monday to Saturday, 9:00 AM to 10:00 AM
+- Dr. Alok Sharma, Ophthalmology, Monday, Wednesday, Friday, Saturday, 10:00 AM to 12:00 PM
+- Dr. Alok Sharma, Ophthalmology, Tuesday, Thursday, 2:00 PM to 4:00 PM
+- Dr. Kalpana Upamanyu, Psychology, Monday, Wednesday, Friday, 12:00 PM to 2:00 PM
+- Dr. A. K. Arora, Respiratory Medicine, On Prior Appointment
+- Dr. Naman Utreja, Oncology, On Prior Appointment
+- Dr. Ashwani Mishra, Paediatrics Surgery, Monday, Thursday, 6:00 PM to 7:00 PM
+- Dr. Hemant Kumar, Neuro Surgery, On Prior Appointment
 
-```bash
-git clone https://github.com/YOUR-USERNAME/voice-agent.git
-cd voice-agent
+## Environment Variables
+
+Required for production:
+
+```text
+FIREBASE_CREDENTIALS_JSON
+SEED_SECRET_KEY
 ```
 
-Create a virtual environment:
+Optional:
+
+```text
+PORT
+FLASK_DEBUG
+LOG_LEVEL
+```
+
+### Where To Put Firebase Credentials
+
+Do not commit the Firebase service account JSON file to GitHub.
+
+For Render, open your Web Service and go to:
+
+```text
+Environment -> Add Environment Variable
+```
+
+Add:
+
+```text
+Key: FIREBASE_CREDENTIALS_JSON
+Value: paste the full Firebase service account JSON content
+```
+
+Also add:
+
+```text
+Key: SEED_SECRET_KEY
+Value: choose a long private random string
+```
+
+For local PowerShell testing:
+
+```powershell
+$env:FIREBASE_CREDENTIALS_JSON = Get-Content -Raw "C:\Users\Lenovo\Downloads\voice-ai-agent-81fca-firebase-adminsdk-fbsvc-4a6468aa9a.json"
+$env:SEED_SECRET_KEY = "your-local-seed-secret"
+```
+
+## Installation
 
 ```bash
 python -m venv venv
-```
-
-Activate it on Windows:
-
-```bash
 venv\Scripts\activate
+pip install -r requirements.txt
 ```
 
-Activate it on macOS or Linux:
+On macOS or Linux:
 
 ```bash
+python -m venv venv
 source venv/bin/activate
-```
-
-Install dependencies:
-
-```bash
 pip install -r requirements.txt
 ```
 
 ## Run Locally
-
-Start the Flask server:
 
 ```bash
 python app.py
@@ -73,78 +172,83 @@ Local base URL:
 http://localhost:5000
 ```
 
-## API Documentation
+If `FIREBASE_CREDENTIALS_JSON` is missing, the app still runs by using `appointments.json` as a local fallback. This is useful while testing the Flask routes before connecting Firebase.
 
-All endpoints return JSON. For local testing, replace `http://localhost:5000` with your deployed Render URL after deployment.
+## API Endpoints
 
-### 1. Health Check
+All endpoints return JSON and include a `success` boolean.
 
-`GET /health`
-
-Checks whether the backend is running.
+### GET `/health`
 
 ```bash
 curl http://localhost:5000/health
 ```
 
-Example response:
+### POST `/seed-data`
 
-```json
-{
-  "status": "ok"
-}
+Seeds the real Sumitra Hospital OPD timetable into Firestore.
+
+```bash
+curl -X POST http://localhost:5000/seed-data ^
+  -H "Content-Type: application/json" ^
+  -H "X-Seed-Key: your-local-seed-secret" ^
+  -d "{}"
 ```
 
-### 2. Check Availability
+### POST `/check-availability`
 
-`POST /check-availability`
-
-Checks available slots for a day. If `time` is included, it checks whether that exact slot is available.
+Specialty is optional.
 
 ```bash
 curl -X POST http://localhost:5000/check-availability ^
   -H "Content-Type: application/json" ^
-  -d "{\"day\":\"Monday\",\"time\":\"10:00 AM\"}"
+  -d "{\"day\":\"Monday\",\"specialty\":\"Cardiology\"}"
 ```
 
-Request body:
+Request:
 
 ```json
 {
   "day": "Monday",
-  "time": "10:00 AM"
+  "specialty": "Cardiology"
 }
 ```
 
-### 3. Book Appointment
-
-`POST /book-appointment`
-
-Books an appointment and removes that slot from available slots.
+### POST `/book-appointment`
 
 ```bash
 curl -X POST http://localhost:5000/book-appointment ^
   -H "Content-Type: application/json" ^
-  -d "{\"name\":\"Rahul Sharma\",\"phone\":\"9876543210\",\"day\":\"Monday\",\"time\":\"10:00 AM\",\"reason\":\"General consultation\"}"
+  -d "{\"name\":\"Pratik Raj\",\"phone\":\"9876543210\",\"doctor\":\"Dr. Ayushi Agarwal\",\"specialty\":\"Cardiology\",\"day\":\"Monday\",\"time\":\"5:00 PM\",\"reason\":\"General consultation\"}"
 ```
 
-Request body:
+Request:
 
 ```json
 {
-  "name": "Rahul Sharma",
+  "name": "Pratik Raj",
   "phone": "9876543210",
+  "doctor": "Dr. Ayushi Agarwal",
+  "specialty": "Cardiology",
   "day": "Monday",
-  "time": "10:00 AM",
+  "time": "5:00 PM",
   "reason": "General consultation"
 }
 ```
 
-### 4. Cancel Appointment
+If the same doctor/day/time is already booked, the endpoint returns `409`.
 
-`POST /cancel-appointment`
+### POST `/cancel-appointment`
 
-Cancels active appointments for a phone number and returns the slot to availability.
+Cancel by appointment ID:
+
+```bash
+curl -X POST http://localhost:5000/cancel-appointment ^
+  -H "Content-Type: application/json" ^
+  -d "{\"appointment_id\":\"slot_dr_ayushi_agarwal_cardiology_monday_5_00_pm\"}"
+```
+
+Cancel by phone:
 
 ```bash
 curl -X POST http://localhost:5000/cancel-appointment ^
@@ -152,150 +256,142 @@ curl -X POST http://localhost:5000/cancel-appointment ^
   -d "{\"phone\":\"9876543210\"}"
 ```
 
-Request body:
+If one phone has multiple active appointments, the API returns `409` and asks for `appointment_id`.
 
-```json
-{
-  "phone": "9876543210"
-}
-```
-
-### 5. Reschedule Appointment
-
-`POST /reschedule-appointment`
-
-Moves an active appointment to a new available day and time.
+### POST `/reschedule-appointment`
 
 ```bash
 curl -X POST http://localhost:5000/reschedule-appointment ^
   -H "Content-Type: application/json" ^
-  -d "{\"phone\":\"9876543210\",\"new_day\":\"Tuesday\",\"new_time\":\"11:00 AM\"}"
+  -d "{\"phone\":\"9876543210\",\"new_doctor\":\"Dr. Ayushi Agarwal\",\"new_specialty\":\"Cardiology\",\"new_day\":\"Wednesday\",\"new_time\":\"5:00 PM\"}"
 ```
 
-Request body:
+Request:
 
 ```json
 {
   "phone": "9876543210",
-  "new_day": "Tuesday",
-  "new_time": "11:00 AM"
+  "new_doctor": "Dr. Ayushi Agarwal",
+  "new_specialty": "Cardiology",
+  "new_day": "Wednesday",
+  "new_time": "5:00 PM"
 }
 ```
 
-The endpoint also accepts `day` and `time` instead of `new_day` and `new_time`.
+### POST `/get-alternate-slots`
 
-### 6. Get FAQ
+```bash
+curl -X POST http://localhost:5000/get-alternate-slots ^
+  -H "Content-Type: application/json" ^
+  -d "{\"doctor\":\"Dr. Ayushi Agarwal\",\"specialty\":\"Cardiology\",\"day\":\"Monday\",\"time\":\"5:00 PM\"}"
+```
 
-`GET /get-faq`
-
-Returns clinic FAQ answers for the voice assistant.
+### GET `/get-faq`
 
 ```bash
 curl http://localhost:5000/get-faq
 ```
 
-### 7. Get Alternate Slots
-
-`POST /get-alternate-slots`
-
-Suggests available slots on other weekdays when the preferred day is not suitable.
-
-```bash
-curl -X POST http://localhost:5000/get-alternate-slots ^
-  -H "Content-Type: application/json" ^
-  -d "{\"day\":\"Monday\"}"
-```
-
-Request body:
-
-```json
-{
-  "day": "Monday"
-}
-```
-
-## Validation Rules
-
-- `day` must be Monday, Tuesday, Wednesday, Thursday, or Friday.
-- `time` must be between 9:00 AM and 6:00 PM.
-- `phone` must be exactly 10 digits.
-- Invalid requests return JSON errors with proper HTTP status codes.
-
 ## Vapi Integration Guide
 
-Create Vapi tools that call these backend URLs:
+In Vapi, create tools that call these backend URLs. The assistant should collect the required details from the caller, then pass them to the matching endpoint.
 
 ```text
-GET  https://YOUR-RENDER-APP.onrender.com/health
-POST https://YOUR-RENDER-APP.onrender.com/check-availability
-POST https://YOUR-RENDER-APP.onrender.com/book-appointment
-POST https://YOUR-RENDER-APP.onrender.com/cancel-appointment
-POST https://YOUR-RENDER-APP.onrender.com/reschedule-appointment
-GET  https://YOUR-RENDER-APP.onrender.com/get-faq
-POST https://YOUR-RENDER-APP.onrender.com/get-alternate-slots
+GET  https://voice-agent-ai-3omf.onrender.com/health
+POST https://voice-agent-ai-3omf.onrender.com/check-availability
+POST https://voice-agent-ai-3omf.onrender.com/book-appointment
+POST https://voice-agent-ai-3omf.onrender.com/cancel-appointment
+POST https://voice-agent-ai-3omf.onrender.com/reschedule-appointment
+POST https://voice-agent-ai-3omf.onrender.com/get-alternate-slots
+GET  https://voice-agent-ai-3omf.onrender.com/get-faq
 ```
 
 Recommended Vapi tool parameters:
 
-- `check-availability`: `day`, optional `time`
-- `book-appointment`: `name`, `phone`, `day`, `time`, optional `reason`
-- `cancel-appointment`: `phone`
-- `reschedule-appointment`: `phone`, `new_day`, `new_time`
-- `get-alternate-slots`: `day`
+- `check-availability`: `day`, optional `specialty`
+- `book-appointment`: `name`, `phone`, `doctor`, `specialty`, `day`, `time`, optional `reason`
+- `cancel-appointment`: `appointment_id` or `phone`
+- `reschedule-appointment`: `appointment_id` or `phone`, `new_doctor`, `new_specialty`, `new_day`, `new_time`
+- `get-alternate-slots`: optional `doctor`, optional `specialty`, optional `day`, optional `time`
 
-The backend supports normal JSON request bodies and Vapi-style `arguments` payloads.
+The backend supports plain JSON request bodies and common Vapi `arguments` payloads, so it can work both from curl/Postman and from the voice assistant.
 
 ## Render Deployment
 
-Push your code to GitHub:
-
-```bash
-git init
-git add .
-git commit -m "Prepare Flask voice appointment backend for deployment"
-git branch -M main
-git remote add origin https://github.com/YOUR-USERNAME/voice-agent.git
-git push -u origin main
-```
-
-Deploy on Render:
-
-1. Open Render and create a new Web Service.
-2. Connect your GitHub repository.
-3. Select the Python runtime.
-4. Set the build command:
+1. Push this project to GitHub.
+2. Open Render and create or update the Web Service.
+3. Set the build command:
 
 ```bash
 pip install -r requirements.txt
 ```
 
-5. Set the start command:
+4. Set the start command:
 
 ```bash
 gunicorn app:app
 ```
 
-The included `Procfile` also contains:
+5. Add environment variables:
 
 ```text
-web: gunicorn app:app
+FIREBASE_CREDENTIALS_JSON=<paste full service account JSON>
+SEED_SECRET_KEY=<your private seed key>
 ```
 
-After deployment, test:
+6. Deploy.
+7. Run `/seed-data` once after deployment to insert the Sumitra Hospital OPD timetable into Firestore.
+
+Render seed command example:
 
 ```bash
-curl https://YOUR-RENDER-APP.onrender.com/health
+curl -X POST https://voice-agent-ai-3omf.onrender.com/seed-data \
+  -H "Content-Type: application/json" \
+  -H "X-Seed-Key: YOUR_SEED_SECRET_KEY" \
+  -d "{}"
 ```
 
-## Production Notes
+## Testing Checklist
 
-`appointments.json` is good for demos and simple prototypes. For real clinic traffic, move appointment data to PostgreSQL, MySQL, Firebase, or another managed database because Render's filesystem is not designed as a permanent production database.
+```bash
+python -m py_compile app.py
+```
 
-## Next Steps
+Health:
 
-- Add a real database
-- Add doctor-specific schedules
-- Add admin authentication
-- Send SMS or WhatsApp confirmations
-- Add logs and monitoring
-- Add automated tests for every endpoint
+```bash
+curl http://localhost:5000/health
+```
+
+Seed:
+
+```bash
+curl -X POST http://localhost:5000/seed-data -H "X-Seed-Key: your-local-seed-secret" -H "Content-Type: application/json" -d "{}"
+```
+
+Check Monday Cardiology availability:
+
+```bash
+curl -X POST http://localhost:5000/check-availability -H "Content-Type: application/json" -d "{\"day\":\"Monday\",\"specialty\":\"Cardiology\"}"
+```
+
+Book Dr. Ayushi Agarwal:
+
+```bash
+curl -X POST http://localhost:5000/book-appointment -H "Content-Type: application/json" -d "{\"name\":\"Pratik Raj\",\"phone\":\"9876543210\",\"doctor\":\"Dr. Ayushi Agarwal\",\"specialty\":\"Cardiology\",\"day\":\"Monday\",\"time\":\"5:00 PM\",\"reason\":\"General consultation\"}"
+```
+
+Run the same booking command again. It should return:
+
+```text
+409 Conflict
+```
+
+## Limitations
+
+- The timetable is weekday-based, so it does not yet handle calendar dates, holidays, or doctor leave.
+- Slot generation uses one-hour blocks from the OPD timing range.
+- Doctors marked "On Prior Appointment" are saved in Firestore, but automatic slots are not created for them.
+- The timetable data is used as publicly available schedule information for this assignment/demo. It should be verified with the hospital before real-world use.
+- `appointments.json` is only for local fallback. Firestore is the intended production database.
+- Before using this in a real hospital workflow, add authentication, admin controls, audit logs, date-wise scheduling, and stronger data privacy controls.
