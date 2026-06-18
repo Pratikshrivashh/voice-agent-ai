@@ -12,6 +12,7 @@ ENV/
 # Environment variables and local secrets
 .env
 .env.*
+!.env.example
 *firebase-adminsdk*.json
 serviceAccountKey.json
 firebase-service-account.json
@@ -31,6 +32,9 @@ htmlcov/
 build/
 dist/
 *.egg-info/
+
+# Frontend dependencies
+node_modules/
 
 # IDE and OS files
 .vscode/

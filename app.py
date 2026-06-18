@@ -35,6 +35,14 @@ VALID_DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"
 FIREBASE_CLIENT = None
 FIREBASE_INIT_ERROR = None
 
+
+@app.after_request
+def add_cors_headers(response):
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type, X-Seed-Key"
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+    return response
+
 SUMITRA_DOCTOR_SCHEDULE = [
     {
         "name": "Dr. Rajesh Goel",
